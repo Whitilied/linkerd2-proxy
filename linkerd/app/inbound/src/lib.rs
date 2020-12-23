@@ -411,7 +411,6 @@ impl Config {
                         ),
                     )),
             )
-            .push_on_response(drain::Retain::layer(drain.clone()))
             .into_inner();
 
         svc::stack(http::NewServeHttp::new(h2_settings, http_server, drain))
