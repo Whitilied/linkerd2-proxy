@@ -202,7 +202,7 @@ impl Config {
             }
             drop(_enter);
 
-            let http_gateway = gateway.build(
+            let http_gateway = gateway.build_http(
                 outbound_http,
                 dst.profiles.clone(),
                 local_identity.as_ref().map(|l| l.name().clone()),

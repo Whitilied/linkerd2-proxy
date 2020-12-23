@@ -15,7 +15,7 @@ pub struct Config {
 struct Allow(NameMatch);
 
 impl Config {
-    pub fn build<O, P, S>(
+    pub fn build_http<O, P, S>(
         self,
         outbound: O,
         profiles: P,
