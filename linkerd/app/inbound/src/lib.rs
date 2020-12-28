@@ -15,8 +15,11 @@ use futures::future;
 use linkerd2_app_core::{
     classify,
     config::{ProxyConfig, ServerConfig},
-    drain, dst, errors, metrics,
-    opaque_transport::DetectHeader,
+    drain,
+    dst,
+    errors,
+    metrics,
+    //opaque_transport::DetectHeader,
     opencensus::proto::trace::v1 as oc,
     profiles,
     proxy::{
@@ -27,7 +30,11 @@ use linkerd2_app_core::{
     spans::SpanConverter,
     svc,
     transport::{self, io, listen, tls},
-    Error, NameAddr, NameMatch, TraceContext, DST_OVERRIDE_HEADER,
+    Error,
+    NameAddr,
+    NameMatch,
+    TraceContext,
+    DST_OVERRIDE_HEADER,
 };
 use std::{collections::HashMap, time::Duration};
 use tokio::{net::TcpStream, sync::mpsc};
@@ -60,7 +67,7 @@ impl Config {
         self,
         listen_addr: std::net::SocketAddr,
         local_identity: tls::Conditional<identity::Local>,
-        http_loopback: L,
+        _http_loopback: L,
         profiles_client: P,
         tap_layer: tap::Layer,
         metrics: metrics::Proxy,
@@ -96,8 +103,6 @@ impl Config {
         let tcp_connect = self.build_tcp_connect(prevent_loop, &metrics);
         let http_router = self.build_http_router(
             tcp_connect.clone(),
-            prevent_loop,
-            http_loopback,
             profiles_client,
             tap_layer,
             metrics.clone(),
@@ -116,7 +121,6 @@ impl Config {
             .into_inner();
 
         let accept = self.build_accept(
-            prevent_loop,
             tcp_forward.clone(),
             http_router,
             metrics.clone(),
@@ -155,11 +159,9 @@ impl Config {
             .into_inner()
     }
 
-    pub fn build_http_router<C, P, L, S>(
+    pub fn build_http_router<C, P>(
         &self,
         tcp_connect: C,
-        prevent_loop: impl Into<PreventLoop>,
-        loopback: L,
         profiles_client: P,
         tap_layer: tap::Layer,
         metrics: metrics::Proxy,
@@ -186,16 +188,6 @@ impl Config {
         P: profiles::GetProfile<NameAddr> + Unpin + Clone + Send + Sync + 'static,
         P::Future: Unpin + Send,
         P::Error: Send,
-        // The loopback router processes requests sent to the inbound port.
-        L: svc::NewService<Target, Service = S> + Unpin + Send + Clone + Sync + 'static,
-        S: tower::Service<
-                http::Request<http::boxed::BoxBody>,
-                Response = http::Response<http::boxed::BoxBody>,
-            > + Unpin
-            + Send
-            + 'static,
-        S::Error: Into<Error>,
-        S::Future: Unpin + Send,
     {
         let Config {
             allow_discovery,
@@ -209,8 +201,6 @@ impl Config {
                 },
             ..
         } = self.clone();
-
-        let prevent_loop = prevent_loop.into();
 
         // Creates HTTP clients for each inbound port & HTTP settings.
         let endpoint = svc::stack(tcp_connect)
@@ -276,7 +266,6 @@ impl Config {
         // If the traffic is targeted at the inbound port, send it through
         // the loopback service (i.e. as a gateway).
         svc::stack(profile)
-            .push_switch(prevent_loop, loopback)
             .check_new_service::<Target, http::Request<http::boxed::BoxBody>>()
             .push_on_response(
                 svc::layers()
@@ -299,7 +288,6 @@ impl Config {
 
     pub fn build_accept<I, F, A, H, S>(
         &self,
-        prevent_loop: impl Into<PreventLoop>,
         tcp_forward: F,
         http_router: H,
         metrics: metrics::Proxy,
@@ -395,22 +383,22 @@ impl Config {
         // as an opaque TCP stream.
         let tcp = svc::stack(tcp_forward.clone())
             .push_map_target(TcpEndpoint::from)
-            .push_switch(
-                prevent_loop.into(),
-                // If the connection targets the inbound port, try to detect an
-                // opaque transport header and rewrite the target port
-                // accordingly. If there was no opaque transport header, the
-                // forwarding will fail when the tcp connect stack applies loop
-                // prevention.
-                svc::stack(tcp_forward)
-                    .push_map_target(TcpEndpoint::from)
-                    .push(transport::NewDetectService::layer(
-                        transport::detect::DetectTimeout::new(
-                            self.proxy.detect_protocol_timeout,
-                            DetectHeader::default(),
-                        ),
-                    )),
-            )
+            // .push_switch(
+            //     prevent_loop.into(),
+            //     // If the connection targets the inbound port, try to detect an
+            //     // opaque transport header and rewrite the target port
+            //     // accordingly. If there was no opaque transport header, the
+            //     // forwarding will fail when the tcp connect stack applies loop
+            //     // prevention.
+            //     svc::stack(tcp_forward)
+            //         .push_map_target(TcpEndpoint::from)
+            //         .push(transport::NewDetectService::layer(
+            //             transport::detect::DetectTimeout::new(
+            //                 self.proxy.detect_protocol_timeout,
+            //                 DetectHeader::default(),
+            //             ),
+            //         )),
+            // )
             .into_inner();
 
         svc::stack(http::NewServeHttp::new(h2_settings, http_server, drain))
