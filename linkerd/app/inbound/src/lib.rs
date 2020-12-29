@@ -122,15 +122,12 @@ impl Config {
             .instrument(|_: &_| debug_span!("tcp"))
             .into_inner();
 
-        let accept = self.build_accept(
+        let accept = self.build_detect_http(
             tcp_forward.clone(),
-            http_router,
-            metrics.clone(),
-            span_sink,
-            drain,
+            self.build_http_server(http_router, metrics.clone(), span_sink, drain),
         );
 
-        self.build_tls_accept(accept, tcp_forward, local_identity, metrics)
+        self.build_tls_accept(accept, tcp_forward, local_identity, metrics.transport)
     }
 
     pub fn build_tcp_connect(
@@ -205,7 +202,7 @@ impl Config {
         } = self.clone();
 
         // Creates HTTP clients for each inbound port & HTTP settings.
-        let endpoint = svc::stack(tcp_connect)
+        let target = svc::stack(tcp_connect)
             .push(http::client::layer(
                 connect.h1_settings,
                 connect.h2_settings,
@@ -214,27 +211,22 @@ impl Config {
                 let backoff = connect.backoff;
                 move |_| Ok(backoff.stream())
             }))
-            .check_new_service::<HttpEndpoint, http::Request<_>>();
-
-        let observe = svc::layers()
+            .check_new_service::<HttpEndpoint, http::Request<_>>()
+            .push_map_target(HttpEndpoint::from)
             // Registers the stack to be tapped.
             .push(tap_layer)
             // Records metrics for each `Target`.
             .push(metrics.http_endpoint.to_layer::<classify::Response, _>())
             .push_on_response(TraceContext::layer(
                 span_sink.map(|span_sink| SpanConverter::client(span_sink, trace_labels())),
-            ));
-
-        let target = endpoint
-            .push_map_target(HttpEndpoint::from)
-            .push(observe)
+            ))
             .push_on_response(http::boxed::BoxResponse::layer())
             .check_new_service::<Target, http::Request<_>>();
 
         // Attempts to discover a service profile for each logical target (as
         // informed by the request's headers). The stack is cached until a
         // request has not been received for `cache_max_idle_age`.
-        let profile = target
+        target
             .clone()
             .check_new_service::<Target, http::Request<http::boxed::BoxBody>>()
             .push_on_response(http::boxed::BoxRequest::layer())
@@ -263,11 +255,6 @@ impl Config {
             .instrument(|_: &Target| debug_span!("profile"))
             // Skip the profile stack if it takes too long to become ready.
             .push_when_unready(target.clone(), self.profile_idle_timeout)
-            .check_new_service::<Target, http::Request<http::boxed::BoxBody>>();
-
-        // If the traffic is targeted at the inbound port, send it through
-        // the loopback service (i.e. as a gateway).
-        svc::stack(profile)
             .check_new_service::<Target, http::Request<http::boxed::BoxBody>>()
             .push_on_response(
                 svc::layers()
@@ -288,78 +275,43 @@ impl Config {
             .into_inner()
     }
 
-    pub fn build_accept<I, F, A, H, S>(
+    pub fn build_http_server<I, H, HSvc>(
         &self,
-        tcp_forward: F,
         http_router: H,
         metrics: metrics::Proxy,
         span_sink: Option<mpsc::Sender<oc::Span>>,
         drain: drain::Watch,
     ) -> impl svc::NewService<
-        TcpAccept,
+        (http::Version, TcpAccept),
         Service = impl tower::Service<
             I,
             Response = (),
             Error = impl Into<Error>,
             Future = impl Send + 'static,
-        > + Send
+        > + Clone
+                      + Send
                       + 'static,
     > + Clone
            + Send
            + 'static
     where
         I: io::AsyncRead + io::AsyncWrite + io::PeerAddr + Unpin + Send + 'static,
-        F: svc::NewService<TcpEndpoint, Service = A> + Unpin + Clone + Send + Sync + 'static,
-        A: tower::Service<io::PrefixedIo<I>, Response = ()> + Clone + Send + Sync + 'static,
-        <A as tower::Service<io::PrefixedIo<I>>>::Error: Into<Error>,
-        <A as tower::Service<io::PrefixedIo<I>>>::Future: Send,
-        A: tower::Service<io::PrefixedIo<io::PrefixedIo<I>>, Response = ()>
-            + Clone
-            + Send
-            + Sync
-            + 'static,
-        <A as tower::Service<io::PrefixedIo<io::PrefixedIo<I>>>>::Error: Into<Error>,
-        <A as tower::Service<io::PrefixedIo<io::PrefixedIo<I>>>>::Future: Send,
-        H: svc::NewService<Target, Service = S> + Unpin + Clone + Send + Sync + 'static,
-        S: tower::Service<
+        H: svc::NewService<Target, Service = HSvc> + Unpin + Clone + Send + Sync + 'static,
+        HSvc: tower::Service<
                 http::Request<http::boxed::BoxBody>,
                 Response = http::Response<http::boxed::BoxBody>,
                 Error = Error,
             > + Clone
             + Send
             + 'static,
-        S::Future: Send,
+        HSvc::Future: Send,
     {
         let ProxyConfig {
             server: ServerConfig { h2_settings, .. },
             dispatch_timeout,
             max_in_flight_requests,
-            detect_protocol_timeout,
-            cache_max_idle_age,
             ..
         } = self.proxy.clone();
-
-        // When HTTP detection fails, forward the connection to the application
-        // as an opaque TCP stream.
-        let tcp = svc::stack(tcp_forward.clone())
-            .push_map_target(TcpEndpoint::from)
-            // .push_switch(
-            //     prevent_loop.into(),
-            //     // If the connection targets the inbound port, try to detect an
-            //     // opaque transport header and rewrite the target port
-            //     // accordingly. If there was no opaque transport header, the
-            //     // forwarding will fail when the tcp connect stack applies loop
-            //     // prevention.
-            //     svc::stack(tcp_forward)
-            //         .push_map_target(TcpEndpoint::from)
-            //         .push(transport::NewDetectService::layer(
-            //             transport::detect::DetectTimeout::new(
-            //                 self.proxy.detect_protocol_timeout,
-            //                 DetectHeader::default(),
-            //             ),
-            //         )),
-            // )
-            .into_inner();
 
         svc::stack(http_router)
             // Removes the override header after it has been used to
@@ -396,23 +348,81 @@ impl Config {
             .instrument(|(v, _): &(http::Version, _)| debug_span!("http", %v))
             .check_new_service::<(http::Version, TcpAccept), http::Request<_>>()
             .push(http::NewServeHttp::layer(h2_settings, drain))
+            .into_inner()
+    }
+
+    pub fn build_detect_http<I, F, FSvc, H, HSvc>(
+        &self,
+        tcp_forward: F,
+        http: H,
+    ) -> impl svc::NewService<
+        TcpAccept,
+        Service = impl tower::Service<
+            I,
+            Response = (),
+            Error = impl Into<Error>,
+            Future = impl Send + 'static,
+        > + Send
+                      + 'static,
+    > + Clone
+           + Send
+           + 'static
+    where
+        I: io::AsyncRead + io::AsyncWrite + io::PeerAddr + Unpin + Send + 'static,
+        F: svc::NewService<TcpEndpoint, Service = FSvc> + Unpin + Clone + Send + Sync + 'static,
+        FSvc: tower::Service<io::PrefixedIo<I>, Response = ()> + Clone + Send + Sync + 'static,
+        FSvc::Error: Into<Error>,
+        FSvc::Future: Send,
+        H: svc::NewService<(http::Version, TcpAccept), Service = HSvc>
+            + Clone
+            + Send
+            + Sync
+            + Unpin
+            + 'static,
+        HSvc: tower::Service<io::PrefixedIo<I>, Response = ()> + Clone + Send + Sync + 'static,
+        HSvc::Error: Into<Error>,
+        HSvc::Future: Send,
+    {
+        // When HTTP detection fails, forward the connection to the application
+        // as an opaque TCP stream.
+        let tcp = svc::stack(tcp_forward)
+            .push_map_target(TcpEndpoint::from)
+            // .push_switch(
+            //     prevent_loop.into(),
+            //     // If the connection targets the inbound port, try to detect an
+            //     // opaque transport header and rewrite the target port
+            //     // accordingly. If there was no opaque transport header, the
+            //     // forwarding will fail when the tcp connect stack applies loop
+            //     // prevention.
+            //     svc::stack(tcp_forward)
+            //         .push_map_target(TcpEndpoint::from)
+            //         .push(transport::NewDetectService::layer(
+            //             transport::detect::DetectTimeout::new(
+            //                 self.proxy.detect_protocol_timeout,
+            //                 DetectHeader::default(),
+            //             ),
+            //         )),
+            // )
+            .into_inner();
+
+        svc::stack(http)
             .push(svc::stack::NewOptional::layer(tcp))
-            .push_cache(cache_max_idle_age)
+            .push_cache(self.proxy.cache_max_idle_age)
             .push(transport::NewDetectService::layer(
                 transport::detect::DetectTimeout::new(
-                    detect_protocol_timeout,
+                    self.proxy.detect_protocol_timeout,
                     http::DetectHttp::default(),
                 ),
             ))
             .into_inner()
     }
 
-    pub fn build_tls_accept<D, A, F, B>(
-        self,
+    pub fn build_tls_accept<D, DSvc, F, FSvc>(
+        &self,
         detect: D,
         tcp_forward: F,
         identity: tls::Conditional<identity::Local>,
-        metrics: metrics::Proxy,
+        metrics: transport::Metrics,
     ) -> impl svc::NewService<
         listen::Addrs,
         Service = impl tower::Service<
@@ -426,31 +436,28 @@ impl Config {
            + Send
            + 'static
     where
-        D: svc::NewService<TcpAccept, Service = A> + Unpin + Clone + Send + Sync + 'static,
-        A: tower::Service<SensorIo<io::BoxedIo>, Response = ()> + Unpin + Send + 'static,
-        A::Error: Into<Error>,
-        A::Future: Send,
-        F: svc::NewService<TcpEndpoint, Service = B> + Unpin + Clone + Send + Sync + 'static,
-        B: tower::Service<SensorIo<TcpStream>, Response = ()> + Unpin + Send + 'static,
-        B::Error: Into<Error>,
-        B::Future: Send,
+        D: svc::NewService<TcpAccept, Service = DSvc> + Clone + Send + Sync + Unpin + 'static,
+        DSvc: tower::Service<SensorIo<io::BoxedIo>, Response = ()> + Send + Unpin + 'static,
+        DSvc::Error: Into<Error>,
+        DSvc::Future: Send,
+        F: svc::NewService<TcpEndpoint, Service = FSvc> + Clone + Send + Sync + Unpin + 'static,
+        FSvc: tower::Service<SensorIo<TcpStream>, Response = ()> + Send + Unpin + 'static,
+        FSvc::Error: Into<Error>,
+        FSvc::Future: Send,
     {
-        let ProxyConfig {
-            detect_protocol_timeout,
-            ..
-        } = self.proxy;
-        let require_identity = self.require_identity_for_inbound_ports;
-
         svc::stack(detect)
-            .push_request_filter(require_identity)
-            .push(metrics.transport.layer_accept())
+            .push_request_filter(self.require_identity_for_inbound_ports.clone())
+            .push(metrics.layer_accept())
             .push_map_target(TcpAccept::from)
-            .push(tls::DetectTls::layer(identity, detect_protocol_timeout))
+            .push(tls::DetectTls::layer(
+                identity,
+                self.proxy.detect_protocol_timeout,
+            ))
             .push_switch(
-                self.disable_protocol_detection_for_ports,
+                self.disable_protocol_detection_for_ports.clone(),
                 svc::stack(tcp_forward)
                     .push_map_target(TcpEndpoint::from)
-                    .push(metrics.transport.layer_accept())
+                    .push(metrics.layer_accept())
                     .push_map_target(TcpAccept::from)
                     .into_inner(),
             )
