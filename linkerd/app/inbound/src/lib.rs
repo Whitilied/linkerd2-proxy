@@ -5,12 +5,19 @@
 
 #![deny(warnings, rust_2018_idioms)]
 
-use self::allow_discovery::AllowProfile;
+mod allow_discovery;
+pub mod endpoint;
+mod prevent_loop;
+mod require_identity_for_ports;
+pub mod tcp;
+
 pub use self::endpoint::{
     HttpEndpoint, ProfileTarget, RequestTarget, Target, TcpAccept, TcpEndpoint,
 };
-use self::prevent_loop::PreventLoop;
-use self::require_identity_for_ports::RequireIdentityForPorts;
+use self::{
+    allow_discovery::AllowProfile, prevent_loop::PreventLoop,
+    require_identity_for_ports::RequireIdentityForPorts,
+};
 use futures::future;
 use linkerd2_app_core::{
     classify,
@@ -24,7 +31,7 @@ use linkerd2_app_core::{
     profiles,
     proxy::{
         http::{self, orig_proto, strip_header},
-        identity, tap, tcp,
+        identity, tap,
     },
     reconnect,
     spans::SpanConverter,
@@ -39,11 +46,6 @@ use linkerd2_app_core::{
 use std::{collections::HashMap, time::Duration};
 use tokio::{net::TcpStream, sync::mpsc};
 use tracing::debug_span;
-
-mod allow_discovery;
-pub mod endpoint;
-mod prevent_loop;
-mod require_identity_for_ports;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -137,24 +139,24 @@ impl Config {
         metrics: &metrics::Proxy,
     ) -> impl tower::Service<
         TcpEndpoint,
-        Error = impl Into<Error>,
+        Error = Error,
+        Response = io::BoxedIo,
         Future = impl future::Future + Unpin + Send,
-        Response = impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     > + tower::Service<
         HttpEndpoint,
-        Error = impl Into<Error>,
+        Error = Error,
+        Response = io::BoxedIo,
         Future = impl future::Future + Unpin + Send,
-        Response = impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     > + Unpin
            + Clone
            + Send {
         // Establishes connections to remote peers (for both TCP
         // forwarding and HTTP proxying).
         svc::connect(self.proxy.connect.keepalive)
-            .push_map_response(io::BoxedIo::new) // Ensures the transport propagates shutdown properly.
             // Limits the time we wait for a connection to be established.
             .push_timeout(self.proxy.connect.timeout)
             .push(metrics.transport.layer_connect())
+            .push_map_response(io::BoxedIo::new) // Ensures the transport propagates shutdown properly.
             .push_request_filter(prevent_loop)
             .into_inner()
     }
