@@ -1,8 +1,7 @@
 // Possibly unused, but useful during development.
 
 pub use crate::proxy::http;
-use crate::transport::Connect;
-use crate::{cache, Error};
+use crate::{cache, transport::Connect, Error};
 pub use linkerd2_buffer as buffer;
 pub use linkerd2_concurrency_limit::ConcurrencyLimit;
 pub use linkerd2_stack::{self as stack, layer, BoxNewService, NewRouter, NewService};
@@ -13,11 +12,14 @@ use std::{
     time::Duration,
 };
 use tower::layer::util::{Identity, Stack as Pair};
-pub use tower::layer::Layer;
-pub use tower::make::MakeService;
-pub use tower::spawn_ready::SpawnReady;
-pub use tower::util::{Either, Oneshot};
-pub use tower::{service_fn as mk, Service, ServiceExt};
+pub use tower::{
+    layer::Layer,
+    make::MakeService,
+    service_fn as mk,
+    spawn_ready::SpawnReady,
+    util::{BoxService, Either, Oneshot},
+    Service, ServiceExt,
+};
 
 #[derive(Clone, Debug)]
 pub struct Layers<L>(L);
