@@ -22,7 +22,7 @@ use futures::future;
 use linkerd2_app_core::{
     classify,
     config::{ProxyConfig, ServerConfig},
-    drain, dst, errors, metrics, opaque_transport,
+    drain, errors, metrics, opaque_transport,
     opencensus::proto::trace::v1 as oc,
     profiles,
     proxy::{
@@ -206,7 +206,6 @@ impl Config {
                 let backoff = connect.backoff;
                 move |_| Ok(backoff.stream())
             }))
-            .check_new_service::<HttpEndpoint, http::Request<_>>()
             .push_map_target(HttpEndpoint::from)
             // Registers the stack to be tapped.
             .push(tap_layer)
@@ -215,15 +214,13 @@ impl Config {
             .push_on_response(TraceContext::layer(
                 span_sink.map(|span_sink| SpanConverter::client(span_sink, trace_labels())),
             ))
-            .push_on_response(http::boxed::BoxResponse::layer())
-            .check_new_service::<Target, http::Request<_>>();
+            .push_on_response(http::boxed::BoxResponse::layer());
 
         // Attempts to discover a service profile for each logical target (as
         // informed by the request's headers). The stack is cached until a
         // request has not been received for `cache_max_idle_age`.
         target
             .clone()
-            .check_new_service::<Target, http::Request<http::boxed::BoxBody>>()
             .push_on_response(http::boxed::BoxRequest::layer())
             // The target stack doesn't use the profile resolution, so drop it.
             .push_map_target(endpoint::Target::from)
@@ -237,7 +234,6 @@ impl Config {
                     // Sets the per-route response classifier as a request
                     // extension.
                     .push(classify::NewClassify::layer())
-                    .check_new_clone::<dst::Route>()
                     .push_map_target(endpoint::route)
                     .into_inner(),
             ))
@@ -250,7 +246,6 @@ impl Config {
             .instrument(|_: &Target| debug_span!("profile"))
             // Skip the profile stack if it takes too long to become ready.
             .push_when_unready(target.clone(), self.profile_idle_timeout)
-            .check_new_service::<Target, http::Request<http::boxed::BoxBody>>()
             .push_on_response(
                 svc::layers()
                     .push(svc::FailFast::layer("Logical", dispatch_timeout))
@@ -266,7 +261,6 @@ impl Config {
             // Boxing is necessary purely to limit the link-time overhead of
             // having enormous types.
             .push(svc::BoxNewService::layer())
-            .check_new_service::<Target, http::Request<http::boxed::BoxBody>>()
             .into_inner()
     }
 
@@ -316,9 +310,6 @@ impl Config {
             // target, and dispatches the request.
             .instrument_from_target()
             .push(svc::NewRouter::layer(RequestTarget::from))
-            .check_new_service::<TcpAccept, http::Request<_>>()
-            // Used by tap.
-            .push_http_insert_target()
             .push_on_response(
                 svc::layers()
                     // Downgrades the protocol if upgraded by an outbound proxy.
@@ -339,9 +330,9 @@ impl Config {
                     .push(http::boxed::BoxResponse::layer()),
             )
             .push(http::NewNormalizeUri::layer())
+            .push_http_insert_target() // Used by tap.
             .push_map_target(|(_, accept): (_, TcpAccept)| accept)
             .instrument(|(v, _): &(http::Version, _)| debug_span!("http", %v))
-            .check_new_service::<(http::Version, TcpAccept), http::Request<_>>()
             .push(http::NewServeHttp::layer(h2_settings, drain))
             .into_inner()
     }
