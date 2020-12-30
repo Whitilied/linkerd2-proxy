@@ -107,7 +107,7 @@ impl Config {
         };
 
         // Forwards TCP streams that cannot be decoded as a known protocol.
-        let tcp = svc::stack(tcp_connect)
+        let fwd = svc::stack(tcp_connect)
             .push_make_thunk()
             .push_on_response(
                 svc::layers()
@@ -117,11 +117,17 @@ impl Config {
             .instrument(|_: &_| debug_span!("tcp"));
 
         let accept = self.build_detect_http(
-            tcp.clone().push_map_target(TcpEndpoint::from).into_inner(),
+            fwd.clone().push_map_target(TcpEndpoint::from).into_inner(),
             http,
         );
 
-        self.build_tls_accept(accept, tcp, local_identity, metrics.transport)
+        let tcp = self.build_tcp_switch_direct(
+            prevent_loop,
+            accept,
+            fwd.clone().push_map_target(TcpEndpoint::from).into_inner(),
+        );
+
+        self.build_tls_accept(tcp, fwd, local_identity, metrics.transport)
     }
 
     pub fn build_tcp_connect(
@@ -395,14 +401,14 @@ impl Config {
     where
         I: io::AsyncRead + io::AsyncWrite + io::PeerAddr + Unpin + Send + 'static,
         A: svc::NewService<TcpAccept, Service = ASvc> + Clone + Send + 'static,
-        ASvc: tower::Service<I, Response = ()> + Clone + Send + Sync + 'static,
+        ASvc: tower::Service<I, Response = ()> + Send + Sync + 'static,
         ASvc::Error: Into<Error>,
         ASvc::Future: Send,
         D: svc::NewService<(Option<opaque_transport::Header>, TcpAccept), Service = DSvc>
             + Clone
             + Send
             + 'static,
-        DSvc: tower::Service<io::PrefixedIo<I>, Response = ()> + Clone + Send + Sync + 'static,
+        DSvc: tower::Service<io::PrefixedIo<I>, Response = ()> + Send + Sync + 'static,
         DSvc::Error: Into<Error>,
         DSvc::Future: Send,
     {
