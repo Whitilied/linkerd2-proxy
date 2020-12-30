@@ -106,8 +106,8 @@ impl Config {
             self.build_http_server(router, metrics.clone(), span_sink, drain.clone())
         };
 
-        // Forwards TCP streams that cannot be decoded as HTTP.
-        let tcp_forward = svc::stack(tcp_connect)
+        // Forwards TCP streams that cannot be decoded as a known protocol.
+        let tcp = svc::stack(tcp_connect)
             .push_make_thunk()
             .push_on_response(
                 svc::layers()
@@ -117,14 +117,11 @@ impl Config {
             .instrument(|_: &_| debug_span!("tcp"));
 
         let accept = self.build_detect_http(
-            tcp_forward
-                .clone()
-                .push_map_target(TcpEndpoint::from)
-                .into_inner(),
+            tcp.clone().push_map_target(TcpEndpoint::from).into_inner(),
             http,
         );
 
-        self.build_tls_accept(accept, tcp_forward, local_identity, metrics.transport)
+        self.build_tls_accept(accept, tcp, local_identity, metrics.transport)
     }
 
     pub fn build_tcp_connect(
