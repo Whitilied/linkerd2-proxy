@@ -22,11 +22,7 @@ use futures::future;
 use linkerd2_app_core::{
     classify,
     config::{ProxyConfig, ServerConfig},
-    drain,
-    dst,
-    errors,
-    metrics,
-    //opaque_transport::DetectHeader,
+    drain, dst, errors, metrics, opaque_transport,
     opencensus::proto::trace::v1 as oc,
     profiles,
     proxy::{
@@ -37,11 +33,7 @@ use linkerd2_app_core::{
     spans::SpanConverter,
     svc,
     transport::{self, io, listen, tls},
-    Error,
-    NameAddr,
-    NameMatch,
-    TraceContext,
-    DST_OVERRIDE_HEADER,
+    Error, NameAddr, NameMatch, TraceContext, DST_OVERRIDE_HEADER,
 };
 use std::{collections::HashMap, time::Duration};
 use tokio::{net::TcpStream, sync::mpsc};
@@ -102,13 +94,17 @@ impl Config {
     {
         let prevent_loop = PreventLoop::from(listen_addr.port());
         let tcp_connect = self.build_tcp_connect(prevent_loop, &metrics);
-        let http_router = self.build_http_router(
-            tcp_connect.clone(),
-            profiles_client,
-            tap_layer,
-            metrics.clone(),
-            span_sink.clone(),
-        );
+
+        let http = {
+            let router = self.build_http_router(
+                tcp_connect.clone(),
+                profiles_client,
+                tap_layer,
+                metrics.clone(),
+                span_sink.clone(),
+            );
+            self.build_http_server(router, metrics.clone(), span_sink, drain.clone())
+        };
 
         // Forwards TCP streams that cannot be decoded as HTTP.
         let tcp_forward = svc::stack(tcp_connect)
@@ -116,14 +112,16 @@ impl Config {
             .push_on_response(
                 svc::layers()
                     .push(tcp::Forward::layer())
-                    .push(drain::Retain::layer(drain.clone())),
+                    .push(drain::Retain::layer(drain)),
             )
-            .instrument(|_: &_| debug_span!("tcp"))
-            .into_inner();
+            .instrument(|_: &_| debug_span!("tcp"));
 
         let accept = self.build_detect_http(
-            tcp_forward.clone(),
-            self.build_http_server(http_router, metrics.clone(), span_sink, drain),
+            tcp_forward
+                .clone()
+                .push_map_target(TcpEndpoint::from)
+                .into_inner(),
+            http,
         );
 
         self.build_tls_accept(accept, tcp_forward, local_identity, metrics.transport)
@@ -348,9 +346,9 @@ impl Config {
             .into_inner()
     }
 
-    pub fn build_detect_http<I, F, FSvc, H, HSvc>(
+    pub fn build_detect_http<I, T, TSvc, H, HSvc>(
         &self,
-        tcp_forward: F,
+        tcp: T,
         http: H,
     ) -> impl svc::NewService<
         TcpAccept,
@@ -366,10 +364,10 @@ impl Config {
            + 'static
     where
         I: io::AsyncRead + io::AsyncWrite + io::PeerAddr + Unpin + Send + 'static,
-        F: svc::NewService<TcpEndpoint, Service = FSvc> + Clone + Send + 'static,
-        FSvc: tower::Service<io::PrefixedIo<I>, Response = ()> + Clone + Send + Sync + 'static,
-        FSvc::Error: Into<Error>,
-        FSvc::Future: Send,
+        T: svc::NewService<TcpAccept, Service = TSvc> + Clone + Send + 'static,
+        TSvc: tower::Service<io::PrefixedIo<I>, Response = ()> + Clone + Send + Sync + 'static,
+        TSvc::Error: Into<Error>,
+        TSvc::Future: Send,
         H: svc::NewService<(http::Version, TcpAccept), Service = HSvc> + Clone + Send + 'static,
         HSvc: tower::Service<io::PrefixedIo<I>, Response = ()> + Clone + Send + Sync + 'static,
         HSvc::Error: Into<Error>,
@@ -377,26 +375,6 @@ impl Config {
     {
         // When HTTP detection fails, forward the connection to the application
         // as an opaque TCP stream.
-        let tcp = svc::stack(tcp_forward)
-            .push_map_target(TcpEndpoint::from)
-            // .push_switch(
-            //     prevent_loop.into(),
-            //     // If the connection targets the inbound port, try to detect an
-            //     // opaque transport header and rewrite the target port
-            //     // accordingly. If there was no opaque transport header, the
-            //     // forwarding will fail when the tcp connect stack applies loop
-            //     // prevention.
-            //     svc::stack(tcp_forward)
-            //         .push_map_target(TcpEndpoint::from)
-            //         .push(transport::NewDetectService::layer(
-            //             transport::detect::DetectTimeout::new(
-            //                 self.proxy.detect_protocol_timeout,
-            //                 DetectHeader::default(),
-            //             ),
-            //         )),
-            // )
-            .into_inner();
-
         svc::stack(http)
             .push(svc::stack::NewOptional::layer(tcp))
             .push_cache(self.proxy.cache_max_idle_age)
@@ -407,6 +385,53 @@ impl Config {
                 ),
             ))
             .into_inner()
+    }
+
+    pub fn build_tcp_switch_direct<I, A, ASvc, D, DSvc>(
+        &self,
+        prevent_loop: PreventLoop,
+        accept: A,
+        direct: D,
+    ) -> impl svc::NewService<
+        TcpAccept,
+        Service = impl tower::Service<
+            I,
+            Response = (),
+            Error = impl Into<Error>,
+            Future = impl Send + 'static,
+        > + Send
+                      + 'static,
+    > + Clone
+           + Send
+           + 'static
+    where
+        I: io::AsyncRead + io::AsyncWrite + io::PeerAddr + Unpin + Send + 'static,
+        A: svc::NewService<TcpAccept, Service = ASvc> + Clone + Send + 'static,
+        ASvc: tower::Service<I, Response = ()> + Clone + Send + Sync + 'static,
+        ASvc::Error: Into<Error>,
+        ASvc::Future: Send,
+        D: svc::NewService<(Option<opaque_transport::Header>, TcpAccept), Service = DSvc>
+            + Clone
+            + Send
+            + 'static,
+        DSvc: tower::Service<io::PrefixedIo<I>, Response = ()> + Clone + Send + Sync + 'static,
+        DSvc::Error: Into<Error>,
+        DSvc::Future: Send,
+    {
+        // If the connection targets the inbound port, try to detect an
+        // opaque transport header and rewrite the target port
+        // accordingly. If there was no opaque transport header, the
+        // forwarding will fail when the tcp connect stack applies loop
+        // prevention.
+        svc::stack(accept).push_switch(
+            prevent_loop,
+            svc::stack(direct).push(transport::NewDetectService::layer(
+                transport::detect::DetectTimeout::new(
+                    self.proxy.detect_protocol_timeout,
+                    opaque_transport::DetectHeader::default(),
+                ),
+            )),
+        )
     }
 
     pub fn build_tls_accept<D, DSvc, F, FSvc>(
