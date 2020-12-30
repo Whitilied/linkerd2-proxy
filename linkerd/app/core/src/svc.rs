@@ -17,7 +17,7 @@ pub use tower::{
     make::MakeService,
     service_fn as mk,
     spawn_ready::SpawnReady,
-    util::{BoxService, Either, Oneshot},
+    util::{BoxService, Either},
     Service, ServiceExt,
 };
 
@@ -84,19 +84,11 @@ impl<L> Layers<L> {
         self.push(stack::OnResponseLayer::new(layer))
     }
 
-    pub fn push_make_ready<Req>(self) -> Layers<Pair<L, stack::MakeReadyLayer<Req>>> {
-        self.push(stack::MakeReadyLayer::default())
-    }
-
     pub fn push_map_response<R: Clone>(
         self,
         map_response: R,
     ) -> Layers<Pair<L, stack::MapResponseLayer<R>>> {
         self.push(stack::MapResponseLayer::new(map_response))
-    }
-
-    pub fn push_oneshot(self) -> Layers<Pair<L, stack::OneshotLayer>> {
-        self.push(stack::OneshotLayer::new())
     }
 
     pub fn push_instrument<G: Clone>(self, get_span: G) -> Layers<Pair<L, InstrumentMakeLayer<G>>> {
@@ -159,10 +151,6 @@ impl<S> Stack<S> {
         Stack(stack::new_service::IntoMakeService::new(self.0))
     }
 
-    pub fn push_make_ready<Req>(self) -> Stack<stack::MakeReady<S, Req>> {
-        self.push(stack::MakeReadyLayer::default())
-    }
-
     /// Buffer requests when when the next layer is out of capacity.
     pub fn spawn_buffer<Req, Rsp>(self, capacity: usize) -> Stack<buffer::Buffer<Req, Rsp>>
     where
@@ -183,10 +171,6 @@ impl<S> Stack<S> {
 
     pub fn push_timeout(self, timeout: Duration) -> Stack<tower::timeout::Timeout<S>> {
         self.push(tower::timeout::TimeoutLayer::new(timeout))
-    }
-
-    pub fn push_oneshot(self) -> Stack<stack::Oneshot<S>> {
-        self.push(stack::OneshotLayer::new())
     }
 
     pub fn push_map_response<R: Clone>(self, map_response: R) -> Stack<stack::MapResponse<S, R>> {
