@@ -111,7 +111,7 @@ where
     CF: Future<Output = Result<CR, io::Error>> + Send + 'static,
     CR: Send + 'static,
     // Server
-    S: Fn(tls::accept::Connection<TcpStream>) -> SF + Clone + Send + 'static,
+    S: Fn(tls::server::Connection<TcpStream>) -> SF + Clone + Send + 'static,
     SF: Future<Output = Result<SR, io::Error>> + Send + 'static,
     SR: Send + 'static,
 {
@@ -146,7 +146,7 @@ where
 
         let mut detect = tls::NewDetectTls::new(
             server_tls,
-            move |meta: tls::accept::Meta| {
+            move |meta: tls::server::Meta| {
                 let server = server.clone();
                 let sender = sender.clone();
                 let peer_identity = Some(meta.peer_identity.clone());

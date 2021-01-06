@@ -36,7 +36,7 @@ pub struct Admin<M> {
 pub struct Accept<M>(Admin<M>, hyper::server::conn::Http);
 
 #[derive(Clone)]
-pub struct Serve<M>(tls::accept::Meta, Accept<M>);
+pub struct Serve<M>(tls::server::Meta, Accept<M>);
 
 pub type ResponseFuture =
     Pin<Box<dyn Future<Output = Result<Response<Body>, Never>> + Send + 'static>>;
@@ -199,10 +199,10 @@ impl<M: FmtMetrics> tower::Service<http::Request<Body>> for Admin<M> {
     }
 }
 
-impl<M: Clone> svc::NewService<tls::accept::Meta> for Accept<M> {
+impl<M: Clone> svc::NewService<tls::server::Meta> for Accept<M> {
     type Service = Serve<M>;
 
-    fn new_service(&mut self, meta: tls::accept::Meta) -> Self::Service {
+    fn new_service(&mut self, meta: tls::server::Meta) -> Self::Service {
         Serve(meta, self.clone())
     }
 }

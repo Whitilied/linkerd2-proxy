@@ -128,7 +128,7 @@ impl<B: Default + HttpBody> CloneRequest<http::Request<B>> for () {
         *clone.headers_mut() = req.headers().clone();
         *clone.version_mut() = req.version();
 
-        if let Some(ext) = req.extensions().get::<tls::accept::Meta>() {
+        if let Some(ext) = req.extensions().get::<tls::server::Meta>() {
             clone.extensions_mut().insert(ext.clone());
         }
 

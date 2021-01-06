@@ -7,7 +7,7 @@ use linkerd2_proxy_api::tap::tap_server::{Tap, TapServer};
 use linkerd2_proxy_http::{trace, HyperServerSvc};
 use linkerd2_proxy_transport::{
     io,
-    tls::{accept::Connection, Conditional, ReasonForNoPeerName},
+    tls::{server::Connection, Conditional, ReasonForNoPeerName},
 };
 use std::{
     future::Future,

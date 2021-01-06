@@ -90,7 +90,7 @@ impl Config {
         Service = impl svc::Service<I, Response = (), Error = Error, Future = impl Send>,
     > + Clone
     where
-        I: tls::accept::Detectable
+        I: tls::server::Detectable
             + io::AsyncRead
             + io::AsyncWrite
             + io::PeerAddr
@@ -390,9 +390,9 @@ impl Config {
         Service = impl svc::Service<I, Response = (), Error = Error, Future = impl Send>,
     > + Clone
     where
-        I: tls::accept::Detectable + Send + 'static,
+        I: tls::server::Detectable + Send + 'static,
         D: svc::NewService<TcpAccept, Service = DSvc> + Clone + Send + 'static,
-        DSvc: svc::Service<SensorIo<tls::accept::Io<I>>, Response = ()> + Send + 'static,
+        DSvc: svc::Service<SensorIo<tls::server::Io<I>>, Response = ()> + Send + 'static,
         DSvc::Error: Into<Error>,
         DSvc::Future: Send,
         F: svc::NewService<TcpEndpoint, Service = FSvc> + Clone + 'static,

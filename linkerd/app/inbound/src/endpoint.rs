@@ -64,8 +64,8 @@ impl From<listen::Addrs> for TcpAccept {
     }
 }
 
-impl From<tls::accept::Meta> for TcpAccept {
-    fn from(tls: tls::accept::Meta) -> Self {
+impl From<tls::server::Meta> for TcpAccept {
+    fn from(tls: tls::server::Meta) -> Self {
         Self {
             target_addr: tls.addrs.target_addr(),
             peer_addr: tls.addrs.peer(),

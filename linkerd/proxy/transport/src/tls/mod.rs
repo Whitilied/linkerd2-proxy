@@ -2,11 +2,10 @@ use linkerd2_identity as identity;
 pub use rustls::TLSError as Error;
 use std::fmt;
 
-pub mod accept;
+pub mod server;
 pub mod client;
-mod conditional_accept;
 
-pub use self::accept::NewDetectTls;
+pub use self::server::NewDetectTls;
 pub use self::client::Client;
 
 /// Describes whether or not a connection was secured with TLS and, if it was
