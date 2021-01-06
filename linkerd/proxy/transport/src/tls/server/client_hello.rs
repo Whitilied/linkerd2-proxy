@@ -1,16 +1,11 @@
-use linkerd2_identity as identity;
+use linkerd2_identity::Name;
 use std::convert::TryFrom;
-use tracing::trace;
 
 #[derive(Debug, Eq, PartialEq)]
-pub enum Match {
-    Incomplete,
-    Matched,
-    NotMatched,
-}
+pub struct Incomplete;
 
 /// Determintes whether the given `input` looks like the start of a TLS
-/// connection that the proxy should terminate.
+/// connection.
 ///
 /// The determination is made based on whether the input looks like (the start
 /// of) a valid ClientHello that a reasonable TLS client might send, and the
@@ -23,37 +18,16 @@ pub enum Match {
 /// This assumes that the ClientHello is small and is sent in a single TLS
 /// record, which is what all reasonable implementations do. (If they were not
 /// to, they wouldn't interoperate with picky servers.)
-pub fn match_client_hello(input: &[u8], identity: &identity::Name) -> Match {
+pub fn read_sni(input: &[u8]) -> Result<Option<Name>, Incomplete> {
     let r = untrusted::Input::from(input).read_all(untrusted::EndOfInput, |input| {
         let r = extract_sni(input);
         input.skip_to_end(); // Ignore anything after what we parsed.
         r
     });
     match r {
-        Ok(Some(sni)) => {
-            let m = identity::Name::try_from(sni.as_slice_less_safe())
-                .map(|sni| {
-                    if sni == *identity {
-                        Match::Matched
-                    } else {
-                        Match::NotMatched
-                    }
-                })
-                .unwrap_or(Match::NotMatched);
-            trace!(
-                "match_client_hello: parsed correctly up to SNI; matches: {:?}",
-                m
-            );
-            m
-        }
-        Ok(None) => {
-            trace!("match_client_hello: failed to parse up to SNI");
-            Match::NotMatched
-        }
-        Err(untrusted::EndOfInput) => {
-            trace!("match_client_hello: needs more input");
-            Match::Incomplete
-        }
+        Ok(Some(sni)) => Ok(Name::try_from(sni.as_slice_less_safe()).ok()),
+        Ok(None) => Ok(None),
+        Err(untrusted::EndOfInput) => Err(Incomplete),
     }
 }
 
@@ -201,63 +175,24 @@ mod tests {
     use super::*;
     use std::str::FromStr;
 
-    /// From `cargo run --example tlsclient -- --http example.com`
-    static VALID_EXAMPLE_COM: &[u8] = include_bytes!("testdata/example-com-client-hello.bin");
-
-    #[test]
-    fn matches() {
-        check_all_prefixes(Match::Matched, "example.com", VALID_EXAMPLE_COM);
-    }
-
-    #[test]
-    fn mismatch_different_sni() {
-        check_all_prefixes(Match::NotMatched, "example.org", VALID_EXAMPLE_COM);
-    }
-
-    #[test]
-    fn mismatch_truncated_sni() {
-        check_all_prefixes(Match::NotMatched, "example.coma", VALID_EXAMPLE_COM);
-    }
-
-    #[test]
-    fn mismatch_appended_sni() {
-        check_all_prefixes(Match::NotMatched, "example.co", VALID_EXAMPLE_COM);
-    }
-
-    #[test]
-    fn mismatch_prepended_sni() {
-        check_all_prefixes(Match::NotMatched, "aexample.com", VALID_EXAMPLE_COM);
-    }
-
     #[test]
     fn mismatch_http_1_0_request() {
-        check_all_prefixes(
-            Match::NotMatched,
-            "example.com",
-            b"GET /TheProject.html HTTP/1.0\r\n\r\n",
-        );
+        assert_eq!(Ok(None), read_sni(b"GET /TheProject.html HTTP/1.0\r\n\r\n"),);
     }
 
-    fn check_all_prefixes(expected_match: Match, identity: &str, input: &[u8]) {
-        assert!(expected_match == Match::Matched || expected_match == Match::NotMatched);
-
-        let identity = identity::Name::from_str(identity).unwrap();
+    #[test]
+    fn check_all_prefixes() {
+        let input = include_bytes!("testdata/example-com-client-hello.bin");
+        let identity = Name::from_str("example.com").unwrap();
 
         let mut i = 0;
-
-        // `Async::NotReady` will be returned for some number of prefixes.
-        loop {
-            let m = match_client_hello(&input[..i], &identity);
-            if m != Match::Incomplete {
-                assert_eq!(m, expected_match);
-                break;
-            }
+        while let Err(Incomplete) = read_sni(&input[..i]) {
             i += 1;
         }
 
         // The same result will be returned for all longer prefixes.
-        for i in (i + 1)..input.len() {
-            assert_eq!(expected_match, match_client_hello(&input[..i], &identity))
+        for i in i..input.len() {
+            assert_eq!(Ok(Some(identity.clone())), read_sni(&input[..i]))
         }
     }
 }

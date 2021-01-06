@@ -22,7 +22,7 @@ use tokio::{
 };
 use tokio_rustls::server::TlsStream;
 use tower::util::ServiceExt;
-use tracing::{debug, trace, warn};
+use tracing::{debug, trace};
 
 pub trait HasConfig {
     fn tls_server_name(&self) -> identity::Name;
@@ -207,20 +207,19 @@ impl Detectable for TcpStream {
         let mut buf = [0u8; PEEK_CAPACITY];
         let sz = self.peek(&mut buf).await?;
         debug!(sz, "Peeked bytes from TCP stream");
-        match client_hello::match_client_hello(&buf, &local_id) {
-            client_hello::Match::Matched => {
-                trace!("Identified matching SNI via peek");
-                // Terminate the TLS stream.
-                let (peer_id, tls) = handshake(tls_config, PrefixedIo::from(self)).await?;
-                return Ok((peer_id, EitherIo::Right(tls)));
+        if let Ok(read) = client_hello::read_sni(&buf) {
+            match read {
+                Some(sni) if sni == local_id => {
+                    trace!("Identified matching SNI via peek");
+                    // Terminate the TLS stream.
+                    let (peer_id, tls) = handshake(tls_config, PrefixedIo::from(self)).await?;
+                    return Ok((peer_id, EitherIo::Right(tls)));
+                }
+                sni => {
+                    trace!(?sni, "Not a matching TLS ClientHello");
+                    return Ok((NO_TLS_META, EitherIo::Left(self.into())));
+                }
             }
-
-            client_hello::Match::NotMatched => {
-                trace!("Not a matching TLS ClientHello");
-                return Ok((NO_TLS_META, EitherIo::Left(self.into())));
-            }
-
-            client_hello::Match::Incomplete => {}
         }
 
         // Peeking didn't return enough data, so instead we'll allocate more
@@ -230,8 +229,8 @@ impl Detectable for TcpStream {
         debug!(buf.capacity = %buf.capacity(), "Reading bytes from TCP stream");
         while self.read_buf(&mut buf).await? != 0 {
             debug!(buf.len = %buf.len(), "Read bytes from TCP stream");
-            match client_hello::match_client_hello(buf.as_ref(), &local_id) {
-                client_hello::Match::Matched => {
+            match client_hello::read_sni(buf.as_ref()) {
+                Ok(Some(sni)) if sni == local_id => {
                     trace!("Identified matching SNI via buffered read");
                     // Terminate the TLS stream.
                     let (peer_id, tls) =
@@ -239,17 +238,9 @@ impl Detectable for TcpStream {
                     return Ok((peer_id, EitherIo::Right(tls)));
                 }
 
-                client_hello::Match::NotMatched => break,
+                Err(client_hello::Incomplete) if buf.capacity() > 0 => {}
 
-                client_hello::Match::Incomplete => {
-                    if buf.capacity() == 0 {
-                        // If we can't buffer an entire TLS ClientHello, it
-                        // almost definitely wasn't initiated by another proxy,
-                        // at least.
-                        warn!("Buffer insufficient for TLS ClientHello");
-                        break;
-                    }
-                }
+                _ => break,
             }
         }
 
