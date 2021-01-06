@@ -1,5 +1,7 @@
 mod client_hello;
+mod handshake;
 
+use self::client_hello::{read_sni, Incomplete, Sni};
 use super::{Conditional, PeerIdentity, ReasonForNoPeerName};
 use crate::io::{EitherIo, PrefixedIo};
 use crate::listen::Addrs;
@@ -207,9 +209,9 @@ impl Detectable for TcpStream {
         let mut buf = [0u8; PEEK_CAPACITY];
         let sz = self.peek(&mut buf).await?;
         debug!(sz, "Peeked bytes from TCP stream");
-        if let Ok(read) = client_hello::read_sni(&buf) {
+        if let Ok(read) = read_sni(&buf) {
             match read {
-                Some(sni) if sni == local_id => {
+                Some(Sni(sni)) if sni == local_id => {
                     trace!("Identified matching SNI via peek");
                     // Terminate the TLS stream.
                     let (peer_id, tls) = handshake(tls_config, PrefixedIo::from(self)).await?;
@@ -229,8 +231,8 @@ impl Detectable for TcpStream {
         debug!(buf.capacity = %buf.capacity(), "Reading bytes from TCP stream");
         while self.read_buf(&mut buf).await? != 0 {
             debug!(buf.len = %buf.len(), "Read bytes from TCP stream");
-            match client_hello::read_sni(buf.as_ref()) {
-                Ok(Some(sni)) if sni == local_id => {
+            match read_sni(buf.as_ref()) {
+                Ok(Some(Sni(sni))) if sni == local_id => {
                     trace!("Identified matching SNI via buffered read");
                     // Terminate the TLS stream.
                     let (peer_id, tls) =
@@ -238,7 +240,7 @@ impl Detectable for TcpStream {
                     return Ok((peer_id, EitherIo::Right(tls)));
                 }
 
-                Err(client_hello::Incomplete) if buf.capacity() > 0 => {}
+                Err(Incomplete) if buf.capacity() > 0 => {}
 
                 _ => break,
             }

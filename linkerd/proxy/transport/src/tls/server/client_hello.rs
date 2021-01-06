@@ -2,6 +2,9 @@ use linkerd2_identity::Name;
 use std::convert::TryFrom;
 
 #[derive(Debug, Eq, PartialEq)]
+pub struct Sni(pub Name);
+
+#[derive(Debug, Eq, PartialEq)]
 pub struct Incomplete;
 
 /// Determintes whether the given `input` looks like the start of a TLS
@@ -18,14 +21,14 @@ pub struct Incomplete;
 /// This assumes that the ClientHello is small and is sent in a single TLS
 /// record, which is what all reasonable implementations do. (If they were not
 /// to, they wouldn't interoperate with picky servers.)
-pub fn read_sni(input: &[u8]) -> Result<Option<Name>, Incomplete> {
+pub fn read_sni(input: &[u8]) -> Result<Option<Sni>, Incomplete> {
     let r = untrusted::Input::from(input).read_all(untrusted::EndOfInput, |input| {
         let r = extract_sni(input);
         input.skip_to_end(); // Ignore anything after what we parsed.
         r
     });
     match r {
-        Ok(Some(sni)) => Ok(Name::try_from(sni.as_slice_less_safe()).ok()),
+        Ok(Some(sni)) => Ok(Name::try_from(sni.as_slice_less_safe()).ok().map(Sni)),
         Ok(None) => Ok(None),
         Err(untrusted::EndOfInput) => Err(Incomplete),
     }
@@ -192,7 +195,7 @@ mod tests {
 
         // The same result will be returned for all longer prefixes.
         for i in i..input.len() {
-            assert_eq!(Ok(Some(identity.clone())), read_sni(&input[..i]))
+            assert_eq!(Ok(Some(Sni(identity.clone()))), read_sni(&input[..i]))
         }
     }
 }
