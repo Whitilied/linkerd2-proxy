@@ -21,7 +21,7 @@ pub struct Incomplete;
 /// This assumes that the ClientHello is small and is sent in a single TLS
 /// record, which is what all reasonable implementations do. (If they were not
 /// to, they wouldn't interoperate with picky servers.)
-pub fn read_sni(input: &[u8]) -> Result<Option<Sni>, Incomplete> {
+pub fn parse_sni(input: &[u8]) -> Result<Option<Sni>, Incomplete> {
     let r = untrusted::Input::from(input).read_all(untrusted::EndOfInput, |input| {
         let r = extract_sni(input);
         input.skip_to_end(); // Ignore anything after what we parsed.
@@ -180,7 +180,10 @@ mod tests {
 
     #[test]
     fn mismatch_http_1_0_request() {
-        assert_eq!(Ok(None), read_sni(b"GET /TheProject.html HTTP/1.0\r\n\r\n"),);
+        assert_eq!(
+            Ok(None),
+            parse_sni(b"GET /TheProject.html HTTP/1.0\r\n\r\n"),
+        );
     }
 
     #[test]
@@ -189,13 +192,13 @@ mod tests {
         let identity = Name::from_str("example.com").unwrap();
 
         let mut i = 0;
-        while let Err(Incomplete) = read_sni(&input[..i]) {
+        while let Err(Incomplete) = parse_sni(&input[..i]) {
             i += 1;
         }
 
         // The same result will be returned for all longer prefixes.
         for i in i..input.len() {
-            assert_eq!(Ok(Some(Sni(identity.clone()))), read_sni(&input[..i]))
+            assert_eq!(Ok(Some(Sni(identity.clone()))), parse_sni(&input[..i]))
         }
     }
 }
