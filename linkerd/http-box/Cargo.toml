@@ -2,11 +2,12 @@
 name = "linkerd2-http-box"
 version = "0.1.0"
 authors = ["Linkerd Developers <cncf-linkerd-dev@lists.cncf.io>"]
+license = "Apache-2.0"
 edition = "2018"
 publish = false
 
 [dependencies]
-bytes = "0.6"
+bytes = "1"
 futures = "0.3"
 http = "0.2"
 http-body = "0.4"

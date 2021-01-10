@@ -2,6 +2,7 @@
 name = "linkerd2-app-inbound"
 version = "0.1.0"
 authors = ["Linkerd Developers <cncf-linkerd-dev@lists.cncf.io>"]
+license = "Apache-2.0"
 edition = "2018"
 publish = false
 description = """
@@ -9,12 +10,12 @@ Configures and runs the inbound proxy
 """
 
 [dependencies]
-bytes = "0.6"
+bytes = "1"
 http = "0.2"
 futures = { version = "0.3" }
 indexmap = "1.0"
 linkerd2-app-core = { path = "../core" }
-tokio = { version = "0.3", features = ["sync"] }
+tokio = { version = "1", features = ["sync"] }
 tracing = "0.1.22"
 
 [dependencies.tower]

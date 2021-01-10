@@ -2,6 +2,7 @@
 name = "linkerd2-timeout"
 version = "0.1.0"
 authors = ["Linkerd Developers <cncf-linkerd-dev@lists.cncf.io>"]
+license = "Apache-2.0"
 edition = "2018"
 publish = false
 
@@ -9,10 +10,9 @@ publish = false
 futures = { version = "0.3", features = ["compat"] }
 linkerd2-error = { path = "../error" }
 linkerd2-stack = { path = "../stack" }
-tokio-connect = { git = "https://github.com/carllerche/tokio-connect" }
 tracing = "0.1.22"
 pin-project = "0.4"
-tokio = { version = "0.3", features = ["time"] }
+tokio = { version = "1", features = ["time"] }
 
 [dependencies.tower]
 version = "0.4"
@@ -25,6 +25,6 @@ features = [
 ]
 
 [dev-dependencies]
-tower-test = "0.3"
-tokio-test = "0.3"
-tokio = { version = "0.3", features = ["macros", "rt-multi-thread"] }
+tower-test = "0.4"
+tokio-test = "0.4"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
