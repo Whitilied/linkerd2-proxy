@@ -1,6 +1,6 @@
 use super::opaque_transport::OpaqueTransport;
 use crate::target::Endpoint;
-use linkerd2_app_core::{
+use linkerd_app_core::{
     config::ConnectConfig,
     metrics,
     proxy::identity,
@@ -32,7 +32,7 @@ pub fn stack<P>(
         .push(OpaqueTransport::layer())
         // Limits the time we wait for a connection to be established.
         .push_timeout(config.timeout)
-        .push(svc::stack::BoxResponse::layer())
+        .push(svc::stack::BoxFuture::layer())
         .push(metrics.transport.layer_connect())
         .push_request_filter(PreventLoop { port: server_port })
         .into_inner()

@@ -4,7 +4,7 @@ use crate::{
     Detect,
 };
 use bytes::BytesMut;
-use linkerd2_error::Error;
+use linkerd_error::Error;
 use tracing::{debug, trace};
 
 #[derive(Copy, Clone, Debug, Default)]

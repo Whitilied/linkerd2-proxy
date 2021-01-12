@@ -1,9 +1,9 @@
 use super::HasConfig;
 use crate::io;
 use futures::prelude::*;
-use linkerd2_error::Error;
-use linkerd2_identity::Name;
-use linkerd2_stack::NewService;
+use linkerd_error::Error;
+use linkerd_identity::Name;
+use linkerd_stack::NewService;
 use std::{
     future::Future,
     pin::Pin,
@@ -84,7 +84,7 @@ where
 }
 
 fn client_identity<S>(tls: &TlsStream<S>) -> Option<Name> {
-    use linkerd2_dns_name as dns;
+    use linkerd_dns_name as dns;
     use rustls::Session;
     use webpki::GeneralDNSNameRef;
 

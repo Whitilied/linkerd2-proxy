@@ -11,7 +11,7 @@ pub use self::endpoint::{
 };
 use self::prevent_loop::PreventLoop;
 use self::require_identity_for_ports::RequireIdentityForPorts;
-use linkerd2_app_core::{
+use linkerd_app_core::{
     classify,
     config::{ConnectConfig, ProxyConfig, ServerConfig},
     drain, dst, errors, metrics,
@@ -69,7 +69,7 @@ pub fn tcp_connect<T: Into<u16>>(
         .push_map_target(|t: T| ([127, 0, 0, 1], t.into()))
         // Limits the time we wait for a connection to be established.
         .push_timeout(config.timeout)
-        .push(svc::stack::BoxResponse::layer())
+        .push(svc::stack::BoxFuture::layer())
         .into_inner()
 }
 

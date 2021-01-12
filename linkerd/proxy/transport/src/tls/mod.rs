@@ -1,4 +1,4 @@
-use linkerd2_identity as identity;
+use linkerd_identity as identity;
 pub use rustls::TLSError as Error;
 use std::fmt;
 
@@ -10,7 +10,7 @@ pub use self::server::NewDetectTls;
 
 /// Describes whether or not a connection was secured with TLS and, if it was
 /// not, the reason why.
-pub type Conditional<T> = linkerd2_conditional::Conditional<T, ReasonForNoPeerName>;
+pub type Conditional<T> = linkerd_conditional::Conditional<T, ReasonForNoPeerName>;
 
 pub type PeerIdentity = Conditional<identity::Name>;
 

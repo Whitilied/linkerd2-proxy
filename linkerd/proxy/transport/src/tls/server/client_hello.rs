@@ -1,4 +1,4 @@
-use linkerd2_identity::Name;
+use linkerd_identity::Name;
 use std::convert::TryFrom;
 
 #[derive(Debug, Eq, PartialEq)]
