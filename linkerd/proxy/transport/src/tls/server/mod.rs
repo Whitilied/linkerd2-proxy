@@ -4,13 +4,13 @@ mod handshake;
 
 use self::client_hello::{parse_sni, Incomplete, Sni};
 use super::{Conditional, PeerIdentity, ReasonForNoPeerName};
-use crate::io::{EitherIo, PrefixedIo};
 use crate::listen::Addrs;
 use bytes::BytesMut;
 use futures::prelude::*;
 use linkerd_dns_name as dns;
 use linkerd_error::Error;
 use linkerd_identity as identity;
+use linkerd_io::{EitherIo, PrefixedIo};
 use linkerd_stack::{layer, NewService};
 pub use rustls::ServerConfig as Config;
 use std::{
@@ -73,7 +73,7 @@ pub type Connection<T> = (Meta, Io<T>);
 
 #[derive(Clone, Debug)]
 pub struct NewDetectTls<I, A> {
-    local_identity: Conditional<I>,
+    local_identity: Option<I>,
     inner: A,
     timeout: Duration,
 }
@@ -84,7 +84,7 @@ pub struct DetectTimeout(());
 #[derive(Clone, Debug)]
 pub struct DetectTls<I, N> {
     addrs: Addrs,
-    local_identity: Conditional<I>,
+    local_identity: Option<I>,
     inner: N,
     timeout: Duration,
 }
@@ -98,7 +98,7 @@ const PEEK_CAPACITY: usize = 512;
 const BUFFER_CAPACITY: usize = 8192;
 
 impl<I: HasConfig, N> NewDetectTls<I, N> {
-    pub fn new(local_identity: Conditional<I>, inner: N, timeout: Duration) -> Self {
+    pub fn new(local_identity: Option<I>, inner: N, timeout: Duration) -> Self {
         Self {
             local_identity,
             inner,
@@ -107,7 +107,7 @@ impl<I: HasConfig, N> NewDetectTls<I, N> {
     }
 
     pub fn layer(
-        local_identity: Conditional<I>,
+        local_identity: Option<I>,
         timeout: Duration,
     ) -> impl layer::Layer<N, Service = Self> + Clone
     where
@@ -156,7 +156,7 @@ where
         let mut new_accept = self.inner.clone();
 
         match self.local_identity.as_ref() {
-            Conditional::Some(local) => {
+            Some(local) => {
                 let config = local.tls_server_config();
                 let name = local.tls_server_name();
                 let timeout = tokio::time::sleep(self.timeout);
@@ -180,9 +180,9 @@ where
                 })
             }
 
-            Conditional::None(reason) => {
+            None => {
                 let meta = Meta {
-                    peer_identity: Conditional::None(reason),
+                    peer_identity: Conditional::None(ReasonForNoPeerName::LocalIdentityDisabled),
                     addrs,
                 };
                 let svc = new_accept.new_service(meta);
