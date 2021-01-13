@@ -144,7 +144,7 @@ where
             move |meta: tls::server::Meta<Addrs>| {
                 let server = server.clone();
                 let sender = sender.clone();
-                let peer_identity = Some(meta.0.clone());
+                let peer_identity = Some(meta.0.as_peer_identity().cloned());
                 service_fn(move |conn| {
                     let server = server.clone();
                     let sender = sender.clone();
