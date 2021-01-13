@@ -32,14 +32,14 @@ pub struct ClientId(pub Name);
 
 impl<L, N> NewTerminate<L, N>
 where
-    L: HasConfig + Clone,
-    N: NewService<(Option<ClientId>, T)> + Clone,
+    L: Clone,
 {
+    pub fn new(local: L, inner: N) -> Self {
+        Self { inner, local }
+    }
+
     pub fn layer(local: L) -> impl layer::Layer<N, Service = Self> + Clone {
-        layer::mk(move |inner| NewTerminate {
-            inner,
-            local: local.clone(),
-        })
+        layer::mk(move |inner| NewTerminate::new(local.clone(), inner))
     }
 }
 
