@@ -1,10 +1,10 @@
 use super::Conditional;
-use crate::io;
 use futures::{
     future::{Either, MapOk},
     prelude::*,
 };
 use linkerd_identity as identity;
+use linkerd_io as io;
 use linkerd_stack::layer;
 pub use rustls::ClientConfig as Config;
 use std::{
@@ -61,7 +61,7 @@ where
     }
 
     fn call(&mut self, target: T) -> Self::Future {
-        let tls = match self.local.clone() {
+        let tls = match self.local.as_ref() {
             Some(l) => tokio_rustls::TlsConnector::from(l.tls_client_config()),
             None => {
                 trace!("Local identity disabled");

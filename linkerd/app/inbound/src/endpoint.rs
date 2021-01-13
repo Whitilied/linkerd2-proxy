@@ -3,8 +3,8 @@ use linkerd_app_core::{
     classify, dst, http_request_authority_addr, http_request_host_addr,
     http_request_l5d_override_dst_addr, metrics, profiles,
     proxy::{http, identity, tap},
-    stack_tracing, svc,
-    transport::{self, listen, tls},
+    stack_tracing, svc, tls,
+    transport::{self, listen},
     transport_header::TransportHeader,
     Addr, Conditional, CANONICAL_DST_HEADER, DST_OVERRIDE_HEADER,
 };
@@ -63,12 +63,12 @@ impl From<listen::Addrs> for TcpAccept {
     }
 }
 
-impl From<tls::server::Meta> for TcpAccept {
-    fn from(tls: tls::server::Meta) -> Self {
+impl From<tls::server::Meta<listen::Addrs>> for TcpAccept {
+    fn from((peer_id, addrs): tls::server::Meta<listen::Addrs>) -> Self {
         Self {
-            target_addr: tls.addrs.target_addr(),
-            peer_addr: tls.addrs.peer(),
-            peer_id: tls.peer_identity,
+            target_addr: addrs.target_addr(),
+            peer_addr: addrs.peer(),
+            peer_id,
         }
     }
 }

@@ -5,7 +5,6 @@ use linkerd_app_core::{
     control, dns,
     exp_backoff::{ExponentialBackoff, ExponentialBackoffStream},
     metrics::ControlHttp as Metrics,
-    transport::tls,
     Error,
 };
 use std::future::Future;
@@ -47,8 +46,7 @@ impl Config {
                 let (local, daemon) = Local::new(&certify);
 
                 let addr = control.addr.clone();
-                let svc =
-                    control.build(dns, metrics, tls::Conditional::Some(certify.trust_anchors));
+                let svc = control.build(dns, metrics, Some(certify.trust_anchors));
 
                 // Save to be spawned on an auxiliary runtime.
                 let task = {

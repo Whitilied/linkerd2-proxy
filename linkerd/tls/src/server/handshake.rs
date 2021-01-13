@@ -1,8 +1,8 @@
 use super::HasConfig;
-use crate::io;
 use futures::prelude::*;
 use linkerd_error::Error;
 use linkerd_identity::Name;
+use linkerd_io as io;
 use linkerd_stack::NewService;
 use std::{
     future::Future,

@@ -1,10 +1,8 @@
 use super::client_hello::{parse_sni, Sni};
-use crate::{
-    io::{self, AsyncReadExt},
-    Detect,
-};
 use bytes::BytesMut;
+use linkerd_detect::Detect;
 use linkerd_error::Error;
+use linkerd_io::{self as io, AsyncReadExt};
 use tracing::{debug, trace};
 
 #[derive(Copy, Clone, Debug, Default)]
