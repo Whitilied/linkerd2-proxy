@@ -1,13 +1,11 @@
 mod client_hello;
-mod detect;
-mod terminate;
-mod transparent;
+
+use crate::ReasonForNoPeerName;
 
 use self::client_hello::{parse_sni, Incomplete, Sni};
-pub use self::terminate::ClientId;
-use super::{Conditional, PeerIdentity, ReasonForNoPeerName};
 use bytes::BytesMut;
 use futures::prelude::*;
+use linkerd_conditional::Conditional;
 use linkerd_dns_name as dns;
 use linkerd_error::Error;
 use linkerd_identity as identity;
@@ -33,6 +31,14 @@ pub trait HasConfig {
     fn tls_server_config(&self) -> Arc<Config>;
 }
 
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+pub enum Status {
+    Disabled,
+    Clear,
+    Passthru { sni: identity::Name },
+    Terminated { client_id: Option<identity::Name> },
+}
+
 /// Must be implemented for I/O types like `TcpStream` on which TLS is
 /// transparently detected.
 ///
@@ -50,7 +56,7 @@ pub trait Detectable {
         self,
         config: Arc<Config>,
         local_name: identity::Name,
-    ) -> io::Result<(PeerIdentity, Io<Self>)>
+    ) -> io::Result<(Status, Io<Self>)>
     where
         Self: Sized;
 }
@@ -62,7 +68,7 @@ pub fn empty_config() -> Arc<Config> {
 }
 
 // TODO sni name
-pub type Meta<T> = (PeerIdentity, T);
+pub type Meta<T> = (Status, T);
 
 pub type Io<T> = EitherIo<PrefixedIo<T>, TlsStream<PrefixedIo<T>>>;
 
@@ -93,6 +99,26 @@ const PEEK_CAPACITY: usize = 512;
 // A larger fallback buffer is allocated onto the heap if the initial peek buffer is
 // insufficient. This is the same value used in HTTP detection.
 const BUFFER_CAPACITY: usize = 8192;
+
+// === impl Status ===
+
+impl Status {
+    pub fn as_peer_identity(&self) -> Conditional<&identity::Name, ReasonForNoPeerName> {
+        match self {
+            Self::Clear => Conditional::None(ReasonForNoPeerName::NoTlsFromRemote),
+            Self::Terminated {
+                client_id: Some(id),
+            } => Conditional::Some(id),
+            Self::Terminated { client_id: None } => {
+                Conditional::None(ReasonForNoPeerName::NoPeerIdFromRemote)
+            }
+            Self::Passthru { .. } => Conditional::None(ReasonForNoPeerName::NoTlsFromRemote),
+            Self::Disabled => Conditional::None(ReasonForNoPeerName::LocalIdentityDisabled),
+        }
+    }
+}
+
+// === impl NewDetectTls ===
 
 impl<I: HasConfig, N> NewDetectTls<I, N> {
     pub fn new(local_identity: Option<I>, inner: N, timeout: Duration) -> Self {
@@ -131,6 +157,8 @@ where
     }
 }
 
+// === impl DetectTls ===
+
 impl<I, L, N, NSvc, T> tower::Service<I> for DetectTls<T, L, N>
 where
     I: Detectable + Send + 'static,
@@ -158,16 +186,15 @@ where
                 let config = local.tls_server_config();
                 let name = local.tls_server_name();
                 let timeout = tokio::time::sleep(self.timeout);
-
                 Box::pin(async move {
-                    let (peer, io) = tokio::select! {
+                    let (status, io) = tokio::select! {
                         res = tcp.detected(config, name) => { res? }
                         () = timeout => {
                             return Err(DetectTimeout(()).into());
                         }
                     };
                     new_accept
-                        .new_service((peer, target))
+                        .new_service((status, target))
                         .oneshot(io)
                         .err_into::<Error>()
                         .await
@@ -175,13 +202,14 @@ where
             }
 
             None => {
-                let peer = Conditional::None(ReasonForNoPeerName::LocalIdentityDisabled);
-                let svc = new_accept.new_service((peer, target));
+                let svc = new_accept.new_service((Status::Disabled, target));
                 Box::pin(svc.oneshot(EitherIo::Left(tcp.into())).err_into::<Error>())
             }
         }
     }
 }
+
+// === impl Detectable ===
 
 #[async_trait::async_trait]
 impl Detectable for TcpStream {
@@ -189,9 +217,7 @@ impl Detectable for TcpStream {
         mut self,
         tls_config: Arc<Config>,
         local_id: identity::Name,
-    ) -> io::Result<(PeerIdentity, Io<Self>)> {
-        const NO_TLS_META: PeerIdentity = Conditional::None(ReasonForNoPeerName::NoTlsFromRemote);
-
+    ) -> io::Result<(Status, Io<Self>)> {
         // First, try to use MSG_PEEK to read the SNI from the TLS ClientHello.
         // Because peeked data does not need to be retained, we use a static
         // buffer to prevent needless heap allocation.
@@ -206,12 +232,15 @@ impl Detectable for TcpStream {
                 Some(Sni(sni)) if sni == local_id => {
                     trace!("Identified matching SNI via peek");
                     // Terminate the TLS stream.
-                    let (peer_id, tls) = handshake(tls_config, PrefixedIo::from(self)).await?;
-                    return Ok((peer_id, EitherIo::Right(tls)));
+                    let (client_id, tls) = handshake(tls_config, PrefixedIo::from(self)).await?;
+                    return Ok((Status::Terminated { client_id }, EitherIo::Right(tls)));
                 }
                 sni => {
                     trace!(?sni, "Not a matching TLS ClientHello");
-                    return Ok((NO_TLS_META, EitherIo::Left(self.into())));
+                    let status = sni
+                        .map(|Sni(sni)| Status::Passthru { sni })
+                        .unwrap_or(Status::Clear);
+                    return Ok((status, EitherIo::Left(self.into())));
                 }
             }
         }
@@ -227,41 +256,44 @@ impl Detectable for TcpStream {
                 Ok(Some(Sni(sni))) if sni == local_id => {
                     trace!("Identified matching SNI via buffered read");
                     // Terminate the TLS stream.
-                    let (peer_id, tls) =
+                    let (client_id, tls) =
                         handshake(tls_config.clone(), PrefixedIo::new(buf.freeze(), self)).await?;
-                    return Ok((peer_id, EitherIo::Right(tls)));
+                    return Ok((Status::Terminated { client_id }, EitherIo::Right(tls)));
+                }
+
+                Ok(Some(Sni(sni))) => {
+                    return Ok((
+                        Status::Passthru { sni },
+                        EitherIo::Left(PrefixedIo::new(buf.freeze(), self)),
+                    ));
                 }
 
                 Err(Incomplete) if buf.capacity() > 0 => {}
-
                 _ => break,
             }
         }
 
         trace!("Could not read TLS ClientHello via buffering");
-        let io = EitherIo::Left(PrefixedIo::new(buf.freeze(), self));
-        Ok((NO_TLS_META, io))
+        Ok((
+            Status::Clear,
+            EitherIo::Left(PrefixedIo::new(buf.freeze(), self)),
+        ))
     }
 }
 
 async fn handshake<T>(
     tls_config: Arc<Config>,
     io: T,
-) -> io::Result<(PeerIdentity, tokio_rustls::server::TlsStream<T>)>
+) -> io::Result<(Option<identity::Name>, tokio_rustls::server::TlsStream<T>)>
 where
     T: io::AsyncRead + io::AsyncWrite + Unpin,
 {
     let tls = tokio_rustls::TlsAcceptor::from(tls_config)
         .accept(io)
         .await?;
-
-    // Determine the peer's identity, if it exist.
-    let peer_id = client_identity(&tls)
-        .map(Conditional::Some)
-        .unwrap_or_else(|| Conditional::None(ReasonForNoPeerName::NoPeerIdFromRemote));
-
-    trace!(peer.identity = ?peer_id, "Accepted TLS connection");
-    Ok((peer_id, tls))
+    let client_id = client_identity(&tls);
+    trace!(client.did = ?client_id, "Accepted TLS connection");
+    Ok((client_id, tls))
 }
 
 fn client_identity<S>(tls: &tokio_rustls::server::TlsStream<S>) -> Option<identity::Name> {

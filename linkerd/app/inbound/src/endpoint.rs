@@ -15,7 +15,7 @@ use tracing::debug;
 pub struct TcpAccept {
     pub target_addr: SocketAddr,
     pub peer_addr: SocketAddr,
-    pub peer_id: tls::PeerIdentity,
+    pub status: Option<tls::server::Status>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -58,17 +58,17 @@ impl From<listen::Addrs> for TcpAccept {
         Self {
             target_addr: tcp.target_addr(),
             peer_addr: tcp.peer(),
-            peer_id: tls::Conditional::None(tls::ReasonForNoPeerName::PortSkipped),
+            status: None, // Port skipped
         }
     }
 }
 
 impl From<tls::server::Meta<listen::Addrs>> for TcpAccept {
-    fn from((peer_id, addrs): tls::server::Meta<listen::Addrs>) -> Self {
+    fn from((status, addrs): tls::server::Meta<listen::Addrs>) -> Self {
         Self {
             target_addr: addrs.target_addr(),
             peer_addr: addrs.peer(),
-            peer_id,
+            status: Some(status),
         }
     }
 }
@@ -79,9 +79,21 @@ impl Into<SocketAddr> for &'_ TcpAccept {
     }
 }
 
+impl TcpAccept {
+    pub fn as_peer_identity(&self) -> Conditional<&identity::Name, tls::ReasonForNoPeerName> {
+        self.status
+            .as_ref()
+            .map(tls::server::Status::as_peer_identity)
+            .unwrap_or(Conditional::None(tls::ReasonForNoPeerName::PortSkipped))
+    }
+}
+
 impl Into<transport::labels::Key> for &'_ TcpAccept {
     fn into(self) -> transport::labels::Key {
-        transport::labels::Key::accept(transport::labels::Direction::In, self.peer_id.clone())
+        transport::labels::Key::accept(
+            transport::labels::Direction::In,
+            self.as_peer_identity().cloned(),
+        )
     }
 }
 
@@ -213,8 +225,15 @@ impl tap::Inspect for Target {
     ) -> Conditional<&'a identity::Name, tls::ReasonForNoPeerName> {
         req.extensions()
             .get::<TcpAccept>()
-            .map(|s| s.peer_id.as_ref())
-            .unwrap_or_else(|| Conditional::None(tls::ReasonForNoPeerName::LocalIdentityDisabled))
+            .map(|t| {
+                t.status
+                    .as_ref()
+                    .map(tls::server::Status::as_peer_identity)
+                    .unwrap_or(Conditional::None(tls::ReasonForNoPeerName::PortSkipped))
+            })
+            .unwrap_or(Conditional::None(
+                tls::ReasonForNoPeerName::LocalIdentityDisabled,
+            ))
     }
 
     fn dst_addr<B>(&self, _: &http::Request<B>) -> Option<SocketAddr> {
@@ -298,7 +317,7 @@ impl<A> svc::stack::RecognizeRoute<http::Request<A>> for RequestTarget {
         Target {
             dst,
             socket_addr: self.accept.target_addr,
-            tls_client_id: self.accept.peer_id.clone(),
+            tls_client_id: self.accept.as_peer_identity().cloned(),
             http_version: req
                 .version()
                 .try_into()

@@ -27,8 +27,9 @@ impl FilterRequest<TcpAccept> for RequireIdentityForPorts {
         let port = meta.target_addr.port();
         let id_required = self.ports.contains(&port);
 
-        tracing::debug!(%port, peer.id = ?meta.peer_id, %id_required);
-        if id_required && meta.peer_id.is_none() {
+        let client_id = meta.as_peer_identity();
+        tracing::debug!(%port, client.id = ?client_id, %id_required);
+        if id_required && client_id.is_none() {
             return Err(IdentityRequired(()).into());
         }
 
