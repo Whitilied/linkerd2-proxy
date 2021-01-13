@@ -1,6 +1,6 @@
 mod client_hello;
 mod detect;
-mod handshake;
+mod terminate;
 
 use self::client_hello::{parse_sni, Incomplete, Sni};
 use super::{Conditional, PeerIdentity, ReasonForNoPeerName};

@@ -11,7 +11,7 @@ use std::{
 };
 use tokio_rustls::{server::TlsStream, TlsAcceptor};
 use tower::{util::ServiceExt, Service};
-use tracing::trace;
+use tracing::{debug, trace};
 
 /// Creates a Service that always terminates TLS as long as a local TLS config is
 /// present.
@@ -73,7 +73,7 @@ where
         Box::pin(async move {
             let io = accept.await?;
             let id = client_identity(&io);
-            trace!(client.id = ?id, "Handshake complete");
+            debug!(client.id = ?id, "Handshake complete");
             inner
                 .new_service((id.map(ClientId), target))
                 .oneshot(io)
