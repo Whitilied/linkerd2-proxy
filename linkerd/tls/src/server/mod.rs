@@ -15,14 +15,6 @@ pub trait HasConfig {
     fn tls_server_config(&self) -> Arc<Config>;
 }
 
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
-pub enum Status {
-    Disabled,
-    Clear,
-    Passthru { sni: identity::Name },
-    Terminated { client_id: Option<identity::Name> },
-}
-
 /// Produces a server config that fails to handshake all connections.
 pub fn empty_config() -> Arc<Config> {
     let verifier = rustls::NoClientAuth::new();
@@ -32,6 +24,26 @@ pub fn empty_config() -> Arc<Config> {
 pub type Meta<T> = (Status, T);
 
 pub type Io<T> = EitherIo<PrefixedIo<T>, TlsStream<PrefixedIo<T>>>;
+
+pub type Connection<T, I> = (Meta<T>, Io<I>);
+
+/// Describes the status of an accepted connection.
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+pub enum Status {
+    /// TLS is disabled on this proxy.
+    Disabled,
+
+    /// No TLS was detected.
+    Clear,
+
+    /// TLS was detected for a non-proxy server. The proxy is acting as a pass-through.
+    Passthru { sni: identity::Name },
+
+    /// TLS was terminated. A client ID is expected to be present unless this
+    /// connection is the first connection established from the proxy to the
+    /// Identity service.
+    Terminated { client_id: Option<identity::Name> },
+}
 
 // === impl Status ===
 
@@ -48,5 +60,16 @@ impl Status {
             Self::Passthru { .. } => Conditional::None(ReasonForNoPeerName::NoTlsFromRemote),
             Self::Disabled => Conditional::None(ReasonForNoPeerName::LocalIdentityDisabled),
         }
+    }
+}
+
+//#[cfg(test)]
+impl HasConfig for identity::CrtKey {
+    fn tls_server_name(&self) -> identity::Name {
+        identity::CrtKey::tls_server_name(self)
+    }
+
+    fn tls_server_config(&self) -> Arc<Config> {
+        identity::CrtKey::tls_server_config(self)
     }
 }

@@ -6,7 +6,7 @@ use linkerd_error::Error;
 use linkerd_identity as identity;
 use linkerd_io as io;
 use linkerd_proxy_http::{trace, HyperServerSvc};
-use linkerd_tls::server::{Io, Meta, Status};
+use linkerd_tls::server::{Connection, Status};
 use std::{
     future::Future,
     pin::Pin,
@@ -15,8 +15,6 @@ use std::{
 };
 use tokio::net::TcpStream;
 use tower::Service;
-
-type Connection<T> = (Meta<T>, Io<TcpStream>);
 
 #[derive(Clone, Debug)]
 pub struct AcceptPermittedClients {
@@ -66,7 +64,7 @@ impl AcceptPermittedClients {
     }
 }
 
-impl<T> Service<Connection<T>> for AcceptPermittedClients {
+impl<T> Service<Connection<T, TcpStream>> for AcceptPermittedClients {
     type Response = ServeFuture;
     type Error = Error;
     type Future = future::Ready<Result<Self::Response, Self::Error>>;
@@ -75,7 +73,7 @@ impl<T> Service<Connection<T>> for AcceptPermittedClients {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, ((status, _), tcp): Connection<T>) -> Self::Future {
+    fn call(&mut self, ((status, _), tcp): Connection<T, TcpStream>) -> Self::Future {
         future::ok(match status {
             Status::Terminated {
                 client_id: Some(peer),

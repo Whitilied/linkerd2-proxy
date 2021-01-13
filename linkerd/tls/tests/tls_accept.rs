@@ -139,8 +139,8 @@ where
 
         let (listen_addr, listen) = BindTcp::new(addr, None).bind().expect("must bind");
 
-        let mut detect = tls::NewDetectTls::new(
-            server_tls,
+        let mut detect = tls::server::NewDetectTls::new(
+            server_tls.map(ServerTls),
             move |meta: tls::server::Meta<Addrs>| {
                 let server = server.clone();
                 let sender = sender.clone();
@@ -294,6 +294,9 @@ struct Target(SocketAddr, Conditional<Name>);
 #[derive(Clone)]
 struct ClientTls(CrtKey);
 
+#[derive(Clone)]
+struct ServerTls(CrtKey);
+
 impl Into<SocketAddr> for Target {
     fn into(self) -> SocketAddr {
         self.0
@@ -309,5 +312,15 @@ impl tls::HasPeerIdentity for Target {
 impl tls::client::HasConfig for ClientTls {
     fn tls_client_config(&self) -> std::sync::Arc<tls::client::Config> {
         self.0.tls_client_config()
+    }
+}
+
+impl tls::server::HasConfig for ServerTls {
+    fn tls_server_config(&self) -> std::sync::Arc<tls::server::Config> {
+        self.0.tls_server_config()
+    }
+
+    fn tls_server_name(&self) -> Name {
+        self.0.tls_server_name()
     }
 }
