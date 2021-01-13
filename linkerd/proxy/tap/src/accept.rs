@@ -6,7 +6,7 @@ use linkerd_error::Error;
 use linkerd_identity as identity;
 use linkerd_io as io;
 use linkerd_proxy_http::{trace, HyperServerSvc};
-use linkerd_tls::server::{Connection, Status};
+use linkerd_tls::server::{Io, Meta, Status};
 use std::{
     future::Future,
     pin::Pin,
@@ -15,6 +15,8 @@ use std::{
 };
 use tokio::net::TcpStream;
 use tower::Service;
+
+type Connection<T> = (Meta<T>, Io<TcpStream>);
 
 #[derive(Clone, Debug)]
 pub struct AcceptPermittedClients {
@@ -64,7 +66,7 @@ impl AcceptPermittedClients {
     }
 }
 
-impl<T> Service<Connection<T, TcpStream>> for AcceptPermittedClients {
+impl<T> Service<Connection<T>> for AcceptPermittedClients {
     type Response = ServeFuture;
     type Error = Error;
     type Future = future::Ready<Result<Self::Response, Self::Error>>;
@@ -73,18 +75,20 @@ impl<T> Service<Connection<T, TcpStream>> for AcceptPermittedClients {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, ((status, _), io): Connection<T, TcpStream>) -> Self::Future {
+    fn call(&mut self, ((status, _), tcp): Connection<T>) -> Self::Future {
         future::ok(match status {
             Status::Terminated {
                 client_id: Some(peer),
             } => {
                 if self.permitted_client_ids.contains(&peer) {
-                    Box::pin(self.serve_authenticated(io))
+                    Box::pin(self.serve_authenticated(tcp))
                 } else {
-                    Box::pin(self.serve_unauthenticated(io, format!("Unauthorized peer: {}", peer)))
+                    Box::pin(
+                        self.serve_unauthenticated(tcp, format!("Unauthorized peer: {}", peer)),
+                    )
                 }
             }
-            _ => Box::pin(self.serve_unauthenticated(io, "Unauthenticated client")),
+            _ => Box::pin(self.serve_unauthenticated(tcp, "Unauthenticated client")),
         })
     }
 }
