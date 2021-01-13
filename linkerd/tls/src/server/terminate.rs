@@ -3,7 +3,7 @@ use futures::prelude::*;
 use linkerd_error::Error;
 use linkerd_identity::Name;
 use linkerd_io as io;
-use linkerd_stack::NewService;
+use linkerd_stack::{layer, NewService};
 use std::{
     future::Future,
     pin::Pin,
@@ -13,16 +13,15 @@ use tokio_rustls::{server::TlsStream, TlsAcceptor};
 use tower::{util::ServiceExt, Service};
 use tracing::{debug, trace};
 
-/// Creates a Service that always terminates TLS as long as a local TLS config is
-/// present.
+/// Creates a Service that always terminates TLS.
 #[derive(Clone, Debug)]
-pub struct NewHandshake<L, N> {
+pub struct NewTerminate<L, N> {
     local: L,
     inner: N,
 }
 
 #[derive(Clone, Debug)]
-pub struct Handshake<L, N, T> {
+pub struct Terminate<L, N, T> {
     local: L,
     inner: N,
     target: T,
@@ -31,15 +30,28 @@ pub struct Handshake<L, N, T> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ClientId(pub Name);
 
-impl<L, N, T> NewService<T> for NewHandshake<L, N>
+impl<L, N> NewTerminate<L, N>
 where
     L: HasConfig + Clone,
     N: NewService<(Option<ClientId>, T)> + Clone,
 {
-    type Service = Handshake<L, N, T>;
+    pub fn layer(local: L) -> impl layer::Layer<N, Service = Self> + Clone {
+        layer::mk(move |inner| NewTerminate {
+            inner,
+            local: local.clone(),
+        })
+    }
+}
+
+impl<L, N, T> NewService<T> for NewTerminate<L, N>
+where
+    L: HasConfig + Clone,
+    N: NewService<(Option<ClientId>, T)> + Clone,
+{
+    type Service = Terminate<L, N, T>;
 
     fn new_service(&mut self, target: T) -> Self::Service {
-        Handshake {
+        Terminate {
             local: self.local.clone(),
             inner: self.inner.clone(),
             target,
@@ -47,7 +59,7 @@ where
     }
 }
 
-impl<T, I, L, N, S> Service<I> for Handshake<L, N, T>
+impl<T, I, L, N, S> Service<I> for Terminate<L, N, T>
 where
     I: io::AsyncRead + io::AsyncWrite + Send + Unpin + 'static,
     T: Clone + Send + 'static,
@@ -73,7 +85,7 @@ where
         Box::pin(async move {
             let io = accept.await?;
             let id = client_identity(&io);
-            debug!(client.id = ?id, "Handshake complete");
+            debug!(client.id = ?id, "Terminate complete");
             inner
                 .new_service((id.map(ClientId), target))
                 .oneshot(io)

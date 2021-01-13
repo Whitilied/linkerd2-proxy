@@ -29,7 +29,7 @@ impl Detect for DetectSni {
                 return Ok(None);
             }
 
-            trace!(read = sz, buf = buf.len(), "Reading SNI");
+            trace!(read = sz, total = buf.len(), "Reading SNI");
             if let Ok(sni) = parse_sni(&buf[..]) {
                 debug!(?sni, "Parsed SNI");
                 return Ok(sni);

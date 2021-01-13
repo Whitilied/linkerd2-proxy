@@ -1,8 +1,10 @@
 mod client_hello;
 mod detect;
 mod terminate;
+mod transparent;
 
 use self::client_hello::{parse_sni, Incomplete, Sni};
+pub use self::terminate::ClientId;
 use super::{Conditional, PeerIdentity, ReasonForNoPeerName};
 use bytes::BytesMut;
 use futures::prelude::*;
